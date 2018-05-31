@@ -1,44 +1,49 @@
-;@ top
-	mov r0, #5
-	sub r5, r0, #1
-	mov r1, #2
-	mov r2, #2
-	mov r3, r2
-multi: @; repeated addition and compare
+mov r0, #9			
+sub r5, r0, #1
+mov r1, #2
+mov r2, #2
+mov r3, r2
+Multi:
 	add r4, r4, r1
 	subs r2, #1
-	beq compare
-	b multi
-compare:
+	beq Compare
+	b Multi
+Compare:
 	cmp r4, r2
 	subs r6, r5, r3
-	beq nextx
-	b nexty
-nexty:
+	beq Nextx
+	b Nexty
+Nexty:
+	;@cmp r0, r4
+	;@beq NextNumber
 	add r3, #1
 	mov r2, r3
 	mov r4, #0
-	b multi
-
-nextx:
+	b Multi
+Nextx:
 	subs r7, r5, r1
-	beq nextnumber
+	beq NextNumber
 	add r1, r1, #1
-	mov r3, r1
 	mov r2, r1
+	mov r3, r1
 	mov r4, #0
-	b multi
-
-nextnumber:
+	b Multi
+NextNumber:
+	cmp r1,r3
+	beq isPrime
 	add r0, r0, #1
 	mov r1, #2
 	mov r2, #2
-	mov r3, r2 
+	mov r3, r2
 	sub r5, r0, #1
 	mov r4, #0
-	b multi
-	
+	b Multi
 isPrime:
- ;@ this guy is a prime
- 
-notPrime:
+	mov r8, r0
+	add r0, r0, #1
+	mov r1, #2
+	mov r2, #2
+	mov r3, r2
+	sub r5, r0, #1
+	mov r4, #0
+	b Multi
