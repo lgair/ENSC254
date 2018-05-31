@@ -7,7 +7,6 @@
 multi: @; repeated addition and compare
 	add r4, r4, r1
 	subs r2, #1
-<<<<<<< HEAD
 	beq compare
 	b multi
 compare:
@@ -43,9 +42,3 @@ isPrime:
  ;@ this guy is a prime
  
 notPrime:
-=======
-	beq next
-	b Loop
-next:
-	
->>>>>>> e33d912690d307c740f62b745c3f175b4566c008
