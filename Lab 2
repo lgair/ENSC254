@@ -1,0 +1,12 @@
+	mov r0, #5
+	mov r1, #5
+	mov r2, #3
+	sub r2, #1
+	add r4, r0, r1
+Loop:
+	add r4, r4, r0
+	sub r2, #1
+	beq next
+	b Loop
+next:
+	
