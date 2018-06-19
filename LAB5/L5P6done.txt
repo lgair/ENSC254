@@ -1,0 +1,57 @@
+.global asm_main
+.align 4
+memory: .space 2000000
+.align 4
+
+asm_main:
+    LDR R0, =0x41210000     ;@ r0 is the address of LED
+    LDR R1, =0x41200000     ;@ r1 is button addresses
+    LDR R2, =0x41220000     ;@ r2 is switch addresses
+    LDR R3, =memory         ;@ array address
+    LDR R7, =0b10000000     ;@ LED number we are turning on or off
+    MOV R8, #0              ;@ debouncer
+    LDR R9, =#6500000       ;@ might be too long lower the value
+    MOV R10, #0
+    MOV R11, #0
+    MOV R12, #0
+    check:
+        MOV R10, #0         ;@ switch positions
+        LDR R10, [R2]           ;@ loads switch positions at index R4
+        MOV R8, #0          ;@ delay
+        MOV R6, #1          ;@ checks if R5 button has been pressed
+        BL delay
+        MVN R10, R10        ;@ inverts R10 to get the correct value of switch positions
+    BL compare
+        LDR R5, [R1]        ;@ gets the button press
+        CMP R6,R5           ;@ checks if button has been presse
+        BEQ hold
+        b off
+    hold:
+        STR R7, [R0]        ;@ position of LED that lights up
+        LDR R5, [R1]        ;@ gets the button press
+        CMP R5, R6          ;@ checks if button is still being pressed
+        BEQ hold
+        B on                                                                                                                                                                        on:                     ;@ turn on LED when button is pressed
+        LSR R7, R7, #1      ;@ shift the LED over for the next button press
+        CMP R7, #0          ;@ check if LED is at LED0                                                                                                                                  BLEQ reset
+        b check
+    off:                    ;@ turn off LED when no button is pressed
+        LDR R6, =0b00000000
+        STR R6, [R0]        ;@ turns off all the LEDs
+        b check
+        reset:              ;@ have the LED wrap around
+        LDR R7, =0b10000000
+        MOV R15, R14
+    delay:                  ;@ wait for the button to settle down
+        ADD R8, R8, #1
+        CMP R8,R9
+        BNE delay
+        MOV R15, R14
+    compare:                ;@BL compare in delay after BNE
+        CMP R7, #0          ;@ sees if it is at currently LED0
+        LDREQ R7, =0b10000000;@ moves LED position to LED7
+        AND R11, R7, R10    ;@ compare LED and switch to see if in same position
+        CMP R11, #0         ;@ sees if the anded result is 0
+        MOVNE R7, R7, LSR #1;@ if it is not 0, that means the LED and switch share the same spot and requires a move
+        BNE compare         ;@ loops if there is a down switch beside it
+        MOV R15, R14
