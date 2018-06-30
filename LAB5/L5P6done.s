@@ -35,7 +35,7 @@ asm_main:
 		BNE delay
 		beq LEDState
 	LEDState:
-		and r6, r10, r7	;@ and summed LED's with the target LED to check for collisions
+		and r6, r10, r7	    ;@ and summed LED's with the target LED to check for collisions
 		cmp r6 , #0
 		bne ShiftLED
 		beq noShift
@@ -51,7 +51,7 @@ asm_main:
 		orr r10, r10, r7	;@ add new light to LEDState register
 		str r10, [r0]		;@ write to LED's
 		str r7, [r3, r12]	;@ store individual LED value to memory with offset or r12
-		;@ maybe put check to see if mem is storing properly
+		                    ;@ maybe put check to see if mem is storing properly
 		b check 			;@ LED should light, wait for new button press
 	removeFromState:
 		ldr r4, [r3, r12]	;@ Load LED value corresponding to button released
@@ -68,5 +68,4 @@ asm_main:
 	off:					;@ turn off LED when no button is pressed
   		STR R10, [R0]		;@ turns off repective LED's
   		b check
-
 
