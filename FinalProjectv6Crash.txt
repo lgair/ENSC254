@@ -1,0 +1,742 @@
+.global asm_main
+.global decode
+
+;@ Define C_Crash as an external function
+;@.extern C_Crash
+.extern DIV
+.align 4
+Z_Mem:		.space 2000000
+.align 4
+Z_Stack: 	.space 1000000
+.align 4
+Z_Reg: 		.space 1000000
+.align 4
+Z_Temp: 	.space 256
+.align 4
+Z_Multi:	.space 1000000
+.align 4
+
+asm_main:
+
+	;@ldr r2, =0x41220000		;@ switch address
+	;@ldr r1, [r2]				;@ Previous State of Switches
+	mov r1, #0
+	Check:
+		ldr r12, =#500000		;@ Delay Counter
+	  	mov r8, #0
+	  	ldr r2, =0x41220000		;@ switch address
+	  	ldr r0, [r2]			;@ switch state
+	  	cmp r0, r1				;@ if r0 is +ve delta exists, else -ve
+	  	bgt Engaged
+	  	bmi Disengaged
+	  	beq SW7Engage
+	Engaged:
+		eors r3, r1, r0			;@ r3 holds most recent switch engaged
+		b Delay
+	Disengaged:
+		eors r3, r0, r1			;@ r3 holds most recent switch disengaged
+		b Delay
+	Delay:
+		mov r1, r0				;@ Update switches previous state current->previous
+		add r8, r8, #1
+		cmp r8, r12
+		bne Delay
+		tst r0 , #0b10000000
+		mov r9, #0				;@ increment by 4
+		bne ZeroOutMem
+		beq Run
+
+	ZeroOutMem:
+		ldr r8, =Z_Mem			;@ Upload pointer set to first byte of Z_mem
+		ldr r10, =2000000
+		mov r11, #0
+		strb r11, [r8, r9]		;@ store from r11 which is zero into every byte of Z_mem
+		add r9, r9, #1
+		cmp r9, r10
+		bne ZeroOutMem
+		mov r9, #0				;@ increment by 4
+		beq ZeroOutStack
+	ZeroOutStack:
+		ldr r2, =Z_Stack
+		ldr r10, =1000000		;@ 1Mb =8000000 bits
+		mov r11, #0
+		strb r11, [r2, r9]
+		add r9, r9, #1
+		cmp r9, r10
+		bne ZeroOutStack
+		mov r9, #0				;@ increment by 4
+		beq ZeroOutReg
+	ZeroOutReg:
+		ldr r2, =Z_Reg
+		ldr r10, =1000000		;@ 1Mb =8000000 bits
+		mov r11, #0
+		strb r11, [r2, r9]
+		add r9, r9, #1
+		cmp r9, r10
+		bne ZeroOutReg
+		beq PrepareTheUART
+	PrepareTheUART:
+		PUSH	{r0-r12}
+		ldr r0, =0x0001004		;@ Mode Register Address
+	  	ldr r4, =0x20			;@ bit pattern teraterm expects
+	  	str r4, [r0]			;@ store from r4, source, Mode Register Location
+	  	ldr r0, =0xE0001018		;@ Baud rate generator address
+	  	ldr r4, =#62			;@ CD Value
+	  	str r4, [r0]			;@ store CD value into Baud Rate Generator Location
+	  	ldr r0,	=0xE0001034		;@ Baud rate divider address (BDIV)
+	  	ldr r4, =#6				;@ BDIV value
+		str r4, [r0]
+	  	ldr r0, =0xE0001000		;@ Control register address
+	  	ldr r4, =0x117			;@ UART reset bit pattern
+		str r4, [r0]
+		POP		{r0-r12}
+		ldr r9, =0xE0001030		;@ UART read & write location
+		;@ check upload mode
+		ldr r8, =0b01000000		;@ Mask for Upload-NoHeader Mode
+		tst r8, r0
+		mov r10, #0
+		bne UploadNoHead
+		beq	UploadWithHead
+	UploadNoHead:
+		ldr r7, =Z_Mem
+		ldr r6, =#0		;@Z_NestingCallDepth
+		ldr r5, =#0		;@Z_StackPointer
+		ldr r4, =#0 	;@Z_ProgramCounter
+		b Recieving
+	UploadWithHead:
+		ldr r7, =Z_Mem
+		ldr r6, =#0		;@Z_NestingCallDepth
+		ldrb r4, [r7, #6];@Z_ProgramCounter loaded into zmem with offset of 6
+		lsl r4, r4, #8
+		ldrb r5, [r7, #7]
+		add r4, r4, r5
+		ldr r5, =#0		;@Z_StackPointer
+		b Recieving
+	ReadVal:
+		ldrb r11, [r9]
+		cmp r11, #0
+		bgt StoreVal
+		beq MidZero		;@ determine if the zero is in the code
+	Recieving:
+		ldr r8, =0xE000102C ;@ UART Status
+		ldrb r8, [r8]
+		tst r8, #0b00000010 	;@ when bit 1 is 1, reciever is Empty, 0 reciever is !Empty
+		beq ReadVal
+		bne Check
+	MidZero:
+		teq r11, r10
+		beq ReadVal
+		bne StoreVal
+	SW7Engage:
+		tst r1, #0b10000000
+		bne Recieving
+		beq Check
+	StoreVal:
+		strb r11, [r7, r10]
+		add r10, r10, #1
+		B Recieving
+
+	;@ Z_Machine interperter is a 16bit processor with the exception of the ZPC assume
+	;@ all registers are 16 bit unless otherwise stated
+	;@ Determine what run mode we are in:
+	;@ 000 Run-Header-Game 		Mode
+	;@ 001 Run-Header-Debug 	Mode
+	;@ 010 Run-NoHeader-Game 	Mode
+	;@ 011 Run-NoHeader-Debug	Mode
+	Run:		;@ we know 0XX mode atm
+		ldr r8, =0b01000000		;@ Mask for Upload-NoHeader Mode
+		ands r8, r8, r0
+		beq Run00X
+		bne Run01X
+	Run00X:
+		ldr r8, =0b00100000		;@ Mask for Upload-Header-Debug Mode
+		ands r8, r8, r0
+		beq Run000				;@ Run-Header-Game
+		bne Run001				;@ Run-Header-Debug
+	Run01X:
+		ldr r8, =0b00100000		;@ Mask for Upload-Header-Debug Mode
+		ands r8, r8, r0
+		beq Run010				;@ Run-NoHeader-Game
+		bne Run011				;@ Run-NoHeader-Debug
+
+	Run000:
+		push {r0-r12}
+		mov r0, #0xffff
+		mov r1, #0b1010
+		;@bl C_Crash
+		b Type
+
+	Run001:
+		push {r0-r12}
+		;@bl C_Crash
+		b Type
+	Run010:
+		push {r0-r12}
+		;@bl C_Crash
+		b Type
+	Run011:
+		push {r0-r12}
+		;@bl C_Crash
+		b Type
+
+	;@Decode Logic
+	Type:
+		ldr r2, =0x41220000		;@ switch address
+	  	ldr r0, [r2]			;@ switch state
+	  	tst r0, #0b10000000		;@ test switch 7
+	  	bne Check
+		mov r9, r4, lsl #4		;@ Load into r9 the value of r4 shifted left 4 times eg 1234->12340000
+		add r8, r9, r7			;@ add Z_mem adress to shifted r4, 12340000 + 00005678 = 12345678->r8
+		ldrb r8, [r7,r4] 		;@ Load byte from r8's location into r8
+		add r4, r4, #1			;@ increment ZPC
+		;@cmp r8, #0
+		;@beq Crash
+		mov r9, r8, lsr#6		;@ Extract 7th and 6th bit
+		tst r9, #0b00000010
+		bne AType
+		beq BType
+		tst r9, #0b00000011		;@ 11 is C type 10 is A type, 01 & 00 are B type
+		bne CType
+
+	Crash:
+		;@TODO Print out instruction inticator eg 0x00 for illegal operads + possibly crash
+		;@The entire instruction, in hex, including all
+		;@ the bytes that seem to be its opcodes and related
+		;@ data items.
+		;@ The location of the first byte of the unknown
+		;@ instruction, as an offset into Zmemory.
+		PUSH	{r0-r12}
+		ldr r0, =0x0001004		;@ Mode Register Address
+	  	ldr r4, =0x20			;@ bit pattern teraterm expects
+	  	str r4, [r0]			;@ store from r4, source, Mode Register Location
+	  	ldr r0, =0xE0001018		;@ Baud rate generator address
+	  	ldr r4, =#62			;@ CD Value
+	  	str r4, [r0]			;@ store CD value into Baud Rate Generator Location
+	  	ldr r0,	=0xE0001034		;@ Baud rate divider address (BDIV)
+	  	ldr r4, =#6				;@ BDIV value
+		str r4, [r0]
+	  	ldr r0, =0xE0001000		;@ Control register address
+	  	ldr r4, =0x117			;@ UART reset bit pattern
+		str r4, [r0]
+		POP		{r0-r12}
+		ldr r11, =0xE0001030		;@ UART read & write location
+
+		and r9, r8, #0x0f	;@ Low Order HalfByte
+		lsr r8, r8, #4		;@ High Order HalfByte
+		cmp r8, #0x00
+		ldreq r8, =#48
+		streq r8, [r11]
+		cmp r8, #0x01
+		ldreq r8, =#49
+		streq r8, [r11]
+		cmp r8, #0x02
+		ldreq r8, =#50
+		streq r8, [r11]
+		cmp r8, #0x02
+		ldreq r8, =#50
+		streq r8, [r11]
+		cmp r8, #0x03
+		ldreq r8, =#51
+		streq r8, [r11]
+		cmp r8, #0x04
+		ldreq r8, =#52
+		streq r8, [r11]
+		cmp r8, #0x05
+		ldreq r8, =#53
+		streq r8, [r11]
+		cmp r8, #0x06
+		ldreq r8, =#54
+		streq r8, [r11]
+		cmp r8, #0x07
+		ldreq r8, =#55
+		streq r8, [r11]
+		cmp r8, #0x08
+		ldreq r8, =#56
+		streq r8, [r11]
+		cmp r8, #0x09
+		ldreq r8, =#57
+		streq r8, [r11]
+		cmp r8, #0x0A
+		ldreq r8, =#65
+		streq r8, [r11]
+		cmp r8, #0x0B
+		ldreq r8, =#66
+		streq r8, [r11]
+		cmp r8, #0x0C
+		ldreq r8, =#67
+		streq r8, [r11]
+		cmp r8, #0x0D
+		ldreq r8, =#68
+		streq r8, [r11]
+		cmp r8, #0x0E
+		ldreq r8, =#69
+		streq r8, [r11]
+		cmp r8, #0x0F
+		ldreq r8, =#70
+		streq r8, [r11]
+		b CheckUART
+
+	CheckUART:
+
+		b CrashNext
+	CrashNext:
+		cmp r9, #0x00
+		ldreq r9, =#48
+		streq r9, [r11]
+		cmp r9, #0x01
+		ldreq r9, =#49
+		streq r9, [r11]
+		cmp r9, #0x02
+		ldreq r9, =#50
+		streq r9, [r11]
+		cmp r9, #0x02
+		ldreq r9, =#50
+		streq r9, [r11]
+		cmp r9, #0x03
+		ldreq r9, =#51
+		streq r9, [r11]
+		cmp r9, #0x04
+		ldreq r9, =#52
+		streq r9, [r11]
+		cmp r9, #0x05
+		ldreq r9, =#53
+		streq r9, [r11]
+		cmp r9, #0x06
+		ldreq r9, =#54
+		streq r9, [r11]
+		cmp r9, #0x07
+		ldreq r9, =#55
+		streq r9, [r11]
+		cmp r9, #0x08
+		ldreq r9, =#56
+		streq r9, [r11]
+		cmp r9, #0x09
+		ldreq r9, =#57
+		streq r9, [r11]
+		cmp r9, #0x0A
+		ldreq r9, =#65
+		streq r9, [r11]
+		cmp r9, #0x0B
+		ldreq r9, =#66
+		streq r9, [r11]
+		cmp r9, #0x0C
+		ldreq r9, =#67
+		streq r9, [r11]
+		cmp r9, #0x0D
+		ldreq r9, =#68
+		streq r9, [r11]
+		cmp r9, #0x0E
+		ldreq r9, =#69
+		streq r9, [r11]
+		cmp r9, #0x0F
+		ldreq r9, =#70
+		streq r9, [r11]
+
+		ldr r9, =#10    ;@'\n'
+		str r9, [r11]
+		ldr r9, =#13    ;@'\r'
+		str r9, [r11]
+		str r4, [r11]
+		b Abort
+
+	Abort:
+		b Check
+
+	AType:
+		tst r8, #0b00110000 	;@ 0 operands eg Operation,
+		bne Type
+		beq OneOperand
+
+;@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+;@ TYPE OF OPERAND
+
+	NoOperands:
+		b Crash
+	OneOperand:
+		and r9, r8, #0b00001111	;@ Bitmask to extract operand encoding
+		cmp r9, #0x00
+		beq Crash
+		cmp r9, #0x1
+		beq OP1_1
+		cmp r9, #0x4
+		beq Crash
+		cmp r9, #0x5
+		beq OP1_5				;@ incriment
+		cmp r9, #0x6
+		beq OP1_6				;@ decriment
+		cmp r9, #0xA
+		beq OP1_A				;@ Print obj
+		cmp r9, #0xf
+		beq Crash				;@ load
+
+		b Crash
+	TwoOperand:
+		and r9, r8, #0b00011111 ;@ Bitmask to extract operand encoding
+		cmp r9, #0x04
+		beq Crash
+		cmp r9, #0x05
+		beq Crash
+		cmp r9, #0x07
+		beq Crash
+		cmp r9, #0x08
+		beq OP2_08				;@OR
+		cmp r9, #0x09
+		beq OP2_09 				;@AND
+		cmp r9, #0x0D
+		beq OP2_0D				;@STORE
+		cmp r9, #0x14
+		beq OP2_14				;@ADD
+		cmp r9, #0x15
+		beq OP2_15				;@SUB
+		cmp r9, #0x17
+		beq OP2_17				;@ DIV
+		cmp r9, #0x18
+		beq OP2_18				;@ MOD
+		b Crash
+
+	VarOperand:
+
+		b Crash
+	BType:
+		b TwoOperand	;@ run B type instructions Operand count is always 2
+
+	BisReg:
+
+		b TwoOperand
+	BisConst:
+
+		b TwoOperand
+	CType:
+		;@ run C type instructions
+		b CType
+
+	;@ branch link called for every opcode
+
+	;@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+	;@ 1 OPERANDS
+	operand1_fetch:
+		push {r14}
+		ldr r9, =0x4000
+		ldr r8, [r7,r9]
+		tst r8, #0b00100000
+		bne OneByteR_Indc
+		tst r8, #0b00010000
+		bne OneByteConst
+		beq TwoByteConst
+	OneByteConst:
+		ldrb r0, [r7, r4]		;@ grabs byte from r7 into r0
+		add r4, r4, #1
+		pop {r15}
+	TwoByteConst:
+		ldrb r10, [r7, r4]		;@ grabs byte from r7 into r10
+		lsl r10, #4
+		add r4, r4, #1			;@ increment ZPC
+		ldrb r11, [r7, r4]		;@ load another byte into r11
+		add r0, r11, r10		;@ add the bytes together
+		add r4, r4, #1
+		pop {r15}
+	OneByteR_Indc:
+		ldrb r0, [r7, r4]
+		cmp r0, #0
+		beq op1POP
+		cmp r0, #15
+		ble local_zreg
+		cmp r0, #255
+		ble global_zreg
+	op1POP:
+		ldr r10, =Z_Stack		;@ find address of z stack
+		ldrb r0, [r10,r5]		;@ pop value into z stack at ZSP
+		sub r5, r5, #1			;@ decrement ZSP
+		pop {r15}
+	local_zreg:
+		mov r10, r0
+		mov r11, #2
+		mov r12, #64
+		sub r10, r10, #1
+		mul r10, r10, r11		;@ A - zregister is located within the set of 32 zregisters
+		mul r11, r6, r12		;@ B - offset of current zprocedure's zreg within zreg zrea
+		add r12, r10, r11		;@ C - offset within local zreg mem
+		ldr r11, =Z_Reg
+		str r0, [r11,r12]		;@ storing value into zreg with offset C
+		add r4, r4, #1
+		pop {r15}
+	global_zreg:				;@ implement header mode xd
+		mov r10, r0
+		mov r11, #16
+		sub r10, r10, r11
+		mov r11, #2
+		mul r10, r10, r11		;@ A - location of global zreg
+		ldr r11, =Z_Reg
+		str r0, [r11,r10]		;@ storing value into zreg with offset A
+		add r4, r4, #1
+		pop {r15}
+
+	;@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+	;@ 2 OPERANDS
+
+	operand2_fetch:
+		push {r14}
+		ldr r9, =0x0000			;@ offset for no header mode
+		ldr r8, [r7,r9]			;@ no header mode with no offset
+		tst r8, #0b01000000		;@ checks if 6th bit is 0 or 1 0 is one byte const, 1 is reg offset
+		beq FirstByteConst_2	;@ bit is 0 -> one byte constant
+		bne FirstRegister_2		;@ bit is 1 -> operand in register
+	FirstByteConst_2:
+		ldrb r0, [r7,r4]
+		add r4, r4, #1
+		b next_byte
+	FirstRegister_2:
+		ldrb r0, [r7, r4]		;@ checks where the operand is in
+		add r4, r4, #1
+		cmp r0, #0
+		beq op2POP
+		cmp r0, #0x0f
+		ble op2local_zreg
+		cmp r0, #255
+		ble op2global_zreg
+	op2POP:						;@POP functionality
+		ldr r10, =Z_Stack		;@ find address of z stack
+		ldrb r0, [r10,r5]		;@ pop value from the z stack at ZSP
+		sub r5, r5, #1
+		add r4, r4, #1
+		b next_byte
+	op2local_zreg:
+		mov r10, r0
+		mov r11, #2
+		mov r12, #64
+		sub r10, r10, #1
+		mul r10, r10, r11		;@ A - zregister is located within the set of 32 zregisters
+		mul r11, r6, r12		;@ B - offset of current zprocedure's zreg within zreg zrea
+		add r12, r10, r11		;@ C - offset within local zreg mem
+		ldr r11, =Z_Reg
+		str r0, [r11,r12]		;@ storing value into zreg with offset C
+		add r4, r4, #1
+		b next_byte
+
+	op2global_zreg:				;@ implement header mode xd
+		mov r10, r0
+		mov r11, #16
+		sub r10, r10, r11
+		mov r11, #2
+		mul r10, r10, r11		;@ A - location of global zreg
+		ldr r11, =Z_Reg
+		str r0, [r11,r10]		;@ storing value into zreg with offset A
+		add r4, r4, #1
+		b next_byte
+
+	next_byte:
+		tst r8, #0b00100000
+		beq SecondByteConst_2
+		bne SecondRegister_2
+	SecondByteConst_2:
+		ldrb r1, [r7,r4]
+		add r4, r4, #1
+		pop {r15}
+	SecondRegister_2:
+		ldrb r1, [r7, r4]		;@ checks where the operand is in
+		cmp r1, #0
+		beq op2POP2
+		cmp r1, #15
+		ble op2local_zreg2
+		cmp r1, #255
+		ble op2global_zreg2
+	op2POP2:
+		ldr r10, =Z_Stack		;@ find address of z stack
+		ldrb r1, [r10,r5]		;@ POP value from the z stack at ZSP
+		sub r5, r5, #1			;@ increment ZSP	maybe have to increment by 4 or 8 for bytes??
+		add r4, r4, #1
+		pop {r15}
+	op2local_zreg2:
+		mov r10, r0
+		mov r11, #2
+		mov r12, #64
+		sub r10, r10, #1
+		mul r10, r10, r11		;@ A - zregister is located within the set of 32 zregisters
+		mul r11, r6, r12		;@ B - offset of current zprocedure's zreg within zreg zrea
+		add r12, r10, r11		;@ C - offset within local zreg mem
+		ldr r11, =Z_Reg
+		str r1, [r11,r12]		;@ storing value into zreg with offset C
+		add r4, r4, #1
+		pop {r15}
+
+	op2global_zreg2:			;@ implement header mode xd
+		mov r10, r0
+		mov r11, #16
+		sub r10, r10, r11
+		mov r11, #2
+		mul r10, r10, r11		;@ A - location of global zreg
+		ldr r11, =Z_Reg
+		str r1, [r11,r10]		;@ storing value into zreg with offset A
+		add r4, r4, #1
+		pop {r15}
+
+	;@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+	;@ VARIABLE
+	var_fetch:
+		push {r14}
+		ldr r0, [r7,r4] 		;@ fetch byte at ZPC
+		add r4, r4, #1			;@ increment ZPC
+		tst r0, #0b00
+		beq ONESIXbitconst
+		tst r0, #0b01
+		beq EIGHTbitconst
+		tst r0, #0b10
+		beq opreg
+		tst r0, #0b11
+
+		;@ you done
+
+	ONESIXbitconst:
+		ldr r0, [r7,r4]
+		add r4, r4, #1
+		ldr r1, [r7,r4]
+		add r4, r4, #1
+		pop {r15}
+	EIGHTbitconst:
+		ldr r0, [r7,r4]
+		add r4, r4, #1
+		pop {r15}
+	opreg:
+		ldrb r0, [r7, r4]		;@ checks where the operand is in
+		cmp r0, #0
+		beq varz_stack
+		cmp r0, #15
+		beq varlocal_zreg
+		cmp r0, #255
+		beq varglobal_zreg
+	varz_stack:
+		tst r1, #0b01000000
+		beq vardestination
+		tst r1, #0b00100000
+		beq varsource
+	vardestination:
+		;@ if destination byte is 0
+		ldr r10, =Z_Stack		;@ find address of z stack
+		str r0, [r10,r5]		;@ push value from the z stack at ZSP
+		add r5, r5, #1			;@ increment ZSP	maybe have to increment by 4 or 8 for bytes??
+		pop {r15}
+	varsource:
+		;@ if source byte is 0
+		ldr r10, =Z_Stack		;@ find address of z stack
+		str r0, [r10,r5]		;@ push value from the z stack at ZSP
+		add r5, r5, #1			;@ increment ZSP	maybe have to increment by 4 or 8 for bytes??
+		add r5, r5, #1
+		pop {r15}
+	varlocal_zreg:
+		mov r10, r0
+		mov r11, #2
+		mov r12, #64
+		sub r10, r10, #1
+		mul r10, r10, r11		;@ A - zregister is located within the set of 32 zregisters
+		mul r11, r6, r12		;@ B - offset of current zprocedure's zreg within zreg zrea
+		add r12, r10, r11		;@ C - offset within local zreg mem
+		ldr r11, =Z_Reg
+		str r0, [r11,r12]		;@ storing value into zreg with offset C
+		add r4, r4, #1
+		pop {r15}
+
+	varglobal_zreg:
+		mov r10, r0
+		mov r11, #16
+		sub r10, r10, r11
+		mov r11, #2
+		mul r10, r10, r11		;@ A - location of global zreg
+		ldr r11, =Z_Reg
+		str r0, [r11,r10]		;@ storing value into zreg with offset A
+		add r4, r4, #1
+		pop {r15}
+
+;@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\
+;@------------------OPERATIONS-------------------------------@\
+;@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\
+
+	OP2_08:
+		bl operand2_fetch
+		ldrb r10, [r7, r4]		;@ Fetch the Destination byte
+		add r4, r4, #1
+		orr r3, r0, r1
+		ldr r11, =Z_Reg
+		strb r3, [r11, r10]
+		b Type
+	OP2_09:
+		bl operand2_fetch
+		ldrb r10, [r7, r4]		;@ Fetch the Destination byte
+		add r4, r4, #1
+		and r3, r0, r1
+		ldr r11, =Z_Reg
+		strb r3, [r11, r10]
+		b Type
+	OP2_0D:
+		bl operand2_fetch
+		ldrb r10, [r7, r4]		;@ Fetch the Destination byte
+		add r4, r4, #1
+		mov r3, r1
+		ldr r11, =Z_Reg
+		strb r3, [r11, r10]
+		b Type
+	OP2_14:
+		bl operand2_fetch
+		ldrb r10, [r7, r4]		;@ Fetch the Destination byte
+		add r4, r4, #1
+		add r3, r0, r1
+		ldr r11, =Z_Reg
+		strb r3, [r11, r10]
+		b Type
+	OP2_15:
+		bl operand2_fetch
+		ldrb r10, [r7, r4]		;@ Fetch the Destination byte
+		add r4, r4, #1
+		sub r3, r0, r1
+		ldr r11, =Z_Reg
+		strb r3, [r11, r10]
+		b Type
+	OP2_16:
+		bl operand2_fetch
+		ldrb r10, [r7, r4]		;@ Fetch the Destination byte
+		add r4, r4, #1
+		mul r3, r0, r1
+		ldr r11, =Z_Reg
+		strb r3, [r11, r10]
+		b Type
+	OP2_17:						;@ returns all values into R3
+		BL operand2_fetch
+		ldrb r10, [r7, r4]		;@ Fetch the Destination byte
+		add r4, r4, #1
+		push {r4-r12}
+		BL DIV
+		pop {r4-r12}
+		ldr r11, =Z_Reg
+		strb r3, [r11, r10]		;@places the answer into the correct position in ZReg
+		b Type
+	OP2_18:
+		BL operand2_fetch
+		ldrb r10, [r7, r4]		;@ Fetch the Destination byte
+		add r4, r4, #1
+		push {r4-r12}
+		BL MOD
+		pop {r4-r12}
+		ldr r11, =Z_Reg
+		strb r3, [r11, r10]		;@places the answer into the correct position in ZReg
+		b Type
+
+;@@@@@@@@@@@@@@@@@@@@@@@@@@@@1 Operation Handlers@@@@@@@@@@@@@@@@@@@@@@@@@@@\
+
+	OP1_1:
+		bl operand1_fetch
+
+	OP1_5:
+		bl operand1_fetch
+		add r0, r0, #1
+		ldr r11, =Z_Reg
+		strb r0, [r11, r10]		;@ r10 is the register that our operand origially came from
+		b Type
+	OP1_6:
+		bl operand1_fetch
+		sub r0, r0, #1
+		ldr r11, =Z_Reg
+		strb r0, [r11, r10]		;@ r10 is the register that our operand origially came from
+		b Type
+	OP1_A:
+		bl operand1_fetch
+		b Type
+
